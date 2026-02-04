@@ -201,9 +201,11 @@ module RubyIndexer
 
     #: -> Array[String]
     def initial_excluded_gems
-      excluded, others = Bundler.definition.dependencies.partition do |dependency|
+      excluded_deps, other_deps = Bundler.definition.dependencies.partition do |dependency|
         dependency.groups == [:development]
       end
+      excluded = excluded_deps.to_set
+      others = other_deps.to_set
 
       # When working on a gem, we need to make sure that its gemspec dependencies can't be excluded. This is necessary
       # because Bundler doesn't assign groups to gemspec dependencies
@@ -216,27 +218,26 @@ module RubyIndexer
         false
       end
 
-      others.concat(this_gem.to_spec.dependencies) if this_gem
-      others.concat(
+      others.merge(this_gem.to_spec.dependencies) if this_gem
+      others.merge(
         others.filter_map do |d|
           d.to_spec&.dependencies
         rescue Gem::MissingSpecError
           nil
         end.flatten,
       )
-      others.uniq!
-      others.map!(&:name)
+      other_names = others.map(&:name).to_set
 
-      transitive_excluded = excluded.each_with_object([]) do |dependency, acc|
+      excluded.to_a.each do |dependency|
         next unless dependency.runtime?
 
         spec = dependency.to_spec
         next unless spec
 
         spec.dependencies.each do |transitive_dependency|
-          next if others.include?(transitive_dependency.name)
+          next if other_names.include?(transitive_dependency.name)
 
-          acc << transitive_dependency
+          excluded << transitive_dependency
         end
       rescue Gem::MissingSpecError
         # If a gem is scoped only to some specific platform, then its dependencies may not be installed either, but they
@@ -244,8 +245,6 @@ module RubyIndexer
         # just ignore if they're missing
       end
 
-      excluded.concat(transitive_excluded)
-      excluded.uniq!
       excluded.map(&:name)
     rescue Bundler::GemfileNotFound
       []
